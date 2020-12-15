@@ -1,0 +1,360 @@
+---
+title: "Untitled"
+author: "Begum Babur"
+date: "12/14/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+###SETUP###
+```{r} 
+#install dependencies
+library(ggplot2)
+library(tidyverse)
+library(MLmetrics)
+```
+
+```{r}
+#Set working directory and read in datasets. 
+setwd("~/Desktop")
+us_cases <- read.csv("US_Cases.csv", header = TRUE)
+anxiety_depression <- read.csv("covid19_anxiety_depression.csv", header = TRUE)
+```
+
+```{r}
+#Refine the dataset to just include values.
+#From May 10th to September 12th to match the anxiety dataset. 
+after_23 <- us_cases[us_cases$submission_date >= "05/10/2020",]
+before_12 <- after_23[after_23$submission_date <= "09/12/2020",]
+```
+
+```{r}
+#convert to numeric
+before_12$tot_cases <- as.numeric(before_12$tot_cases)
+before_12$submission_date <- as.Date(before_12$submission_date, "%m/%d/%Y")
+
+#Aggregate cases over weeks
+weekly_cases <- before_12 %>%
+  group_by(week = cut(submission_date, "week", start.on.monday=TRUE), state) %>%
+  summarise(week_cases = mean(tot_cases))
+
+#Check if there are missing values 
+which(is.na(weekly_cases$week_cases))
+which(is.na(weekly_cases))
+#There are no missing values.
+
+
+#Break the weeks into periods.
+#The week including May 10th will be coded as Week 1 and so on.
+#This will be helpful in merging with the anxiety data frame. 
+weekly_cases$period <- factor(weekly_cases$week,
+  levels = c("2020-05-04", "2020-05-11", "2020-05-18", "2020-05-25", "2020-06-01", "2020-06-08", "2020-06-15", "2020-06-22", "2020-06-29", "2020-07-06", "2020-07-13", "2020-07-20", "2020-07-27", "2020-08-03", "2020-08-10", "2020-08-17", "2020-08-24", "2020-08-31", "2020-09-07"),
+  labels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19")) # follow the order of the levels)
+
+#Remove column specifying week. 
+weekly_cases <- subset(weekly_cases, select = -week)
+```
+
+```{r}
+#Plot number of cases per week by states.
+require(ggplot2)
+ggplot(data=weekly_cases)+
+  geom_point(mapping = aes(period,week_cases, color = factor(state)))+
+  labs(title="Number of Cases by Week", x="Week", y="Number of Cases")+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5, hjust = 1))
+```
+This plot represents the number of cases per week by state, starting from the week of April 20 to the week of October 12. Due to the high number of states, it is difficult to see the increase on a state by state basis clearly. Let's take a look at a few number of states at a time. 
+
+
+
+```{r}
+#Randomly picked 5 states to show the rise of case numbers over weeks. 
+set.seed(2)
+sample(weekly_cases$state, 5, replace = FALSE)
+HI <- weekly_cases[weekly_cases$state == "HI", ]
+SD <- weekly_cases[weekly_cases$state == "SD", ]
+VA <- weekly_cases[weekly_cases$state == "VA", ]
+VT <- weekly_cases[weekly_cases$state == "VT", ]
+NC <- weekly_cases[weekly_cases$state == "NC", ]
+#Merge these states into a data frame
+subset_states <- rbind(HI, SD, VA, VT, NC)
+
+#plot the number of cases over the weeks by these states. 
+ggplot(data=subset_states)+
+  geom_point(mapping = aes(period,week_cases, color = factor(state)))+
+  labs(title="Number of Cases by Week", x="Week", y="Number of Cases")+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5, hjust = 1))
+```
+
+```{r}
+#Change variable names of this data set to match the weekly cases data set. 
+anxiety_depression <- anxiety_depression %>%
+  rename(state = State)%>%
+  rename(period = Period)
+```
+
+
+```{r}
+#Merge two datasets together.
+#Show the weekly measures of case numbers, anxiety and depression levels across states. 
+merged <- merge(anxiety_depression, weekly_cases, by = c("period", "state"))
+attach(merged)
+merged_df <- merged[order(period),]
+head(merged_df)
+```
+
+```{r}
+#Plot anxiety levels across weeks
+ggplot(data=merged_df)+
+  geom_point(mapping = aes(period,Anxiety))+#, color = factor(state)))+
+  labs(title="Anxiety Levels by Week", x="Week", y="Anxiety")+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5, hjust = 1))
+
+#Plot anxiety values and their frequencies.
+hist(merged_df$Anxiety,
+     main = "Anxiety Levels", xlab = "Anxiety Levels")
+```
+
+```{r}
+#Create training and testing data. 
+#Use 80% of the data from the beginning to train the model.
+#The remaining 20% to test.
+#I decided to look at periods instead of recordings because
+#I did not want a period to end abruptly.
+#I calculated when 80% of the periods would be achieved.
+#Divided the data from there.  
+training_data_length<- round(length(unique(merged_df$period))*0.80, 0)
+#Period 15 is the 80th percent. 
+#The end of period 15 corresponds to row number 765. 
+#Using periods 1:15 to train the data and 15:19 to test the data. 
+
+train_df <- merged_df %>%
+  arrange(period)%>%
+  slice(1:765)
+          
+test_df <- merged_df %>%
+  arrange(period)%>%
+  slice(765:969)
+```
+
+
+```{r}
+#summarize dataframes.
+summary(train_df); summary(test_df)
+```
+
+
+```{r}
+#Let's observe the relationship between anxiety and number of cases 
+plot(train_df$week_cases, train_df$Anxiety,
+     main = "Relationship Between Anxiety and Weekly Case Numbers", 
+     xlab = "Case Numbers", ylab = "Anxiety")
+abline(lm(Anxiety ~ week_cases, data = train_df), col = "red")
+```
+
+
+```{r}
+#Correlation between anxiety and depression
+with(train_df, cor(week_cases, Anxiety))
+```
+Anxiety and number of cases appears to have a 0.26 correlation. This number turned out to be smaller than I expected.
+
+###MODEL BUILDING###
+
+Let's build our regression model over weekly cases and anxiety using our train_data and test it using test_data. 
+```{r}
+#Regression model using training data set. 
+model_full <- lm(Anxiety ~ week_cases, data = train_df)
+summary(model_full)
+mean(summary(model_full)$residuals^2) #mean square error of the model
+
+#Plot residuals vs. fitted values 
+plot(model_full$fitted.values, model_full$residuals,
+     main = "Fitted Values vs. Predicted Values of Training Data", 
+     xlab = "Fitted Values", ylab = "Predicted Values",
+     ylim = c(-15,15), xlim = c(29.8,40))
+abline(model_full, col = "red")
+
+#Test the model using test data
+predictions_full <- predict(model_full, test_df)
+actual_full <- test_df$Anxiety
+#Merge actual values and predicted values in a data frame
+data_full <- as.data.frame(cbind(predictions_full, actual_full))
+
+
+#Compute R2, Root MSE, Mean Absolute Error 
+#of predicted values of the test data and actual values of the test data,
+#using the model trained by our training data. 
+
+require(MLmetrics)
+metrics <- data.frame(r2 = R2_Score(data_full$predictions_full, data_full$actual_full),
+                      mse = MSE(data_full$predictions_full, data_full$actual_full),
+           rmse = RMSE(data_full$predictions_full, data_full$actual_full),
+           mae = MAE(data_full$predictions_full, data_full$actual_full))
+metrics
+
+#Plot predicted values and true values of training data,
+#with the abline indicated in red.
+ggplot(data_full)+
+  geom_point(mapping = aes(actual_full, predictions_full))+
+  ggtitle("Predicted vs. Actual Values of Test Data")+
+  xlab("True Values") + ylab("Predicted Values")+
+  geom_abline(slope = predict_full$coefficients[2], intercept = predict_full$coefficients[1], color = "red")
+```
+The training model found a significant relationship between the anxiety levels and number of cases in a week. 
+
+The r2 of the model was -0.55, representing the squared correlation between observed and predicted values of anxiety. This turned out to be very small and did not match the adjusted r2 of the training model which was ~0.07, indicating that the model is not good at prediction. 
+The mean square error of test data set is 24.41, which exceeds the anticipated value specified by the model (17.74), indicates that the model has been overfitted.
+
+The root mean square of the model was 4.94, representing the average prediction error made by the model in predicting anxiety for the number of cases. 
+
+The mean absolute error is an alternative to rmse, which is less sensitie to outliers. The average absolute difference between observed and predicted outcomes turned out to be 4. 
+
+
+
+
+This may be because the anxiety levels and rising case numbers are differing in each state. 
+Let's break this down by state. 
+```{r}
+#Build a linear model looking at the relationship between
+#anxiety and case numbers within each state. 
+require(plyr)
+model <- dlply(train_df, "state", 
+               function(train_df) lm(Anxiety ~ week_cases, data = train_df))
+ldply(model, coef)
+l_ply(model, summary, .print = TRUE)
+#Prints out the summary of linear model for every state. 
+```
+
+Let's pick a state and see how anxiety levels are affected. 
+```{r}
+#Example residual plots for Alabama, 
+sum_AL <- summary(model$AL)
+a<- model$AL
+names(a)
+
+#Mean square error of AL
+mean(sum_AL$residuals^2) #mean square error of the model
+
+#Plot residuals of Alabama
+layout(matrix(c(1,2,3,4),2,2))
+plot(model$AL)
+
+ggplot(data=model$AL, aes(sum_AL$residuals))+
+  geom_histogram(binwidth = 1, color = "black", fill= "lightblue")+
+  ggtitle("Histogram for Model Residuals of Alabama")+
+  xlab("Residuals")
+
+ggplot(data=model$AL)+
+  geom_points(aes())+
+  ggtitle("Histogram for Model Residuals of Alabama")+
+  xlab("Residuals")
+  
+```
+The intercept estimate was 2.685,meaning the expected anxiety values if covid cases = 0. The number of case estimates were 1.02x10^-4, meaning for each additional case, the anxiety level increases by this number. Even though the number is low, this is understandable because anxiety  levels will not increase  by each additional case, rather an increase of thousands will likely to cause an increase in anxiety level.  
+The adjusted R-squared value was 0.299 and the p-value was 0.02. 
+The residual standard error was 4.2 on 12 degrees of freedom. The residuals are not centered around zero, indicating that the model is not a great fit. 
+
+
+```{r}
+#Predict anxiety levels in Alabama using training model with test data.
+predictions_AL <- data.frame(preds = predict(object=model$AL, newdata = test_df[test_df$state == "AL",], type = "response"))
+#Here we see the model's predictions for the 
+#anxiety rates in Alabama's test set. 
+#The numbers correspond to rownumbers,
+#where Alabama appears in the test_df. 
+#3 = period 15, 54 = period 16, 
+#105 = period 17, 156 = period 18, 
+#207 = period 19. 
+#Let's compare with Alabama's actual anxiety values 
+
+#Extract actual anxiety levels in Alabama in test data.
+require(dplyr)
+AL_values <- test_df %>%
+  filter(state=="AL")%>%
+  group_by(period)
+
+actual_AL <- AL_values$Anxiety
+
+#Merge actual values and predicted values in a data frame
+data_AL <- as.data.frame(cbind(predictions_AL, actual_AL))
+
+require(MLmetrics)
+metrics_AL <- data.frame(r2 = R2_Score(data_AL$preds, data_AL$actual_AL),
+                      mse = MSE(data_AL$preds, data_AL$actual_AL),
+           rmse = RMSE(data_AL$preds, data_AL$actual_AL),
+           mape = MAPE(data_AL$preds, data_AL$actual_AL))
+metrics_AL
+```
+We see the anxiety values in each period according to the weekly cases. The MSE of predicted and true values of anxiety in AL is 24.72. The r2 between predicted anxiety scores in Alabama and actual values is -0.29. We can see how the predictions perform through the graph below. 
+
+The r2 of the model was -0.29 representing the squared correlation between observed and predicted values of anxiety in AL. This turned out to be very small and did not match the adjusted r2 of the training model which was 0.20, indicating that the model is not good at prediction. 
+The mean square error of test data set is 24.41, which exceeds the anticipated value specified by the model (16.20), indicates that the model has been overfitted.
+
+The root mean square of the model was 4.97, representing the average prediction error made by the model in predicting anxiety for the number of cases. 
+
+The mean absolute error is an alternative to rmse, which is less sensitie to outliers. The average absolute difference between observed and predicted outcomes turned out to be 4.4. 
+
+```{r}
+plot(data_AL$preds,main = "Predicted vs. Actual Values of Anxiety in Alabama")
+points(data_AL$actual_AL, col = "red")
+```
+
+
+We can observe how the model predicted anxiety in other states as well. Let's take a look at New York.
+```{r}
+#Example residual plots for New York, 
+sum_NY <- summary(model$NY)
+sum_NY
+
+#Mean square error of NY
+mean(sum_NY$residuals^2) #mean square error of the model
+
+#Plot residuals of Alabama
+layout(matrix(c(1,2,3,4),2,2))
+plot(model$NY)
+
+ggplot(data=model$NY, aes(sum_NY$residuals))+
+  geom_histogram(binwidth = 1, color = "black", fill= "lightgreen")+
+  ggtitle("Histogram for Model Residuals of New York")+
+  xlab("Residuals")
+```
+The intercept estimate was 2.88,meaning the expected anxiety values if covid cases = 0. The number of case estimates were 1.81x10^-5, meaning for each additional case, the anxiety level increases by this number. Even though the number is low, this is understandable because anxiety  levels will not increase  by each additional case, rather an increase of thousands will likely to cause an increase in anxiety level.  
+The adjusted R-squared value was -0.08 and the p-value was 0.81.This indicates a lack of relationship between rising covid cases and anxiety levels in New York 
+The residual standard error was 3.5 on 12 degrees of freedom. The residuals are not centered around zero, indicating that the model is not a great fit. 
+
+
+Let's test the training model with test dataset. 
+```{r}
+#Extract actual values from test data.
+NY_values <- test_df %>%
+  filter(state=="NY")%>%
+  group_by(period)
+
+#Get predictions using training model on test data set. 
+predict_NY <- data.frame(pred_NY = predict(object=model$NY, newdata = test_df[test_df$state == "NY",], type = "response"))
+
+#Merge the actual and predicted values
+NY_predictions<- as.data.frame(cbind(NY_values$period, NY_values$Anxiety, predict_NY))
+NY_predictions
+
+require(MLmetrics)
+metrics_NY <- data.frame(
+  r2 = R2_Score(NY_predictions$pred_NY, NY_predictions$`NY_values$Anxiety`),
+  mse =MSE(NY_predictions$pred_NY, NY_predictions$`NY_values$Anxiety`),
+  rmse = RMSE(data_AL$preds, data_AL$actual_AL),
+  mae = MAE(data_AL$preds, data_AL$actual_AL))
+metrics_NY
+
+#Plot predicted vs. actual values in New York
+plot(NY_predictions$pred_NY,NY_predictions$`NY_values$Anxiety`,main = "Predicted vs. Actual Values of Anxiety in New", xlab = "Predictions", ylab="Actual")
+```
+ The r2 of the model was -0.29 representing the squared correlation between observed and predicted values of anxiety in NY This turned out to be very small but close adjusted r2 of the training model which was -0.70.
+ 
+The mean square error of test data set is 5.88, which is below the anticipated value specified by the model (9.65). This indicates that the model provided an accurate prediction for NY.
+
+The root mean square of the model was 4.97, representing the average prediction error made by the model in predicting anxiety for the number of cases. 
+
+The mean absolute error is an alternative to rmse, which is less sensitie to outliers. The average absolute difference between observed and predicted outcomes turned out to be 4.4. 
+
+
